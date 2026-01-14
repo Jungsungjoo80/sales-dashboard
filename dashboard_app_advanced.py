@@ -135,7 +135,7 @@ app.layout = dbc.Container([
         dbc.Col([
             html.H1([
                 html.I(className="fas fa-chart-line me-3"),
-                "고급 트래픽 데이터 분석 대시보드"
+                "LABONLAB 트래픽 데이터 분석 대시보드"
             ], className="text-center text-primary mb-4 mt-4")
         ])
     ]),
