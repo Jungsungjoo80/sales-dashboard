@@ -1,8 +1,12 @@
 """
-Advanced Sales Dashboard v4
+Advanced Sales Dashboard v5
 개선사항:
-- M1 의견 알림 박스 제거
-- KPI 금액 표시를 천단위 콤마 + 원화 형식으로 변경 (예: 210,800,000원)
+- 모든 금액 표시를 천단위 콤마 + 원화 형식으로 변경
+- 차트 hover 시 원화 표시
+- 누락된 컬럼 추가 (쇼핑몰, 슬롯수, 특이사항, 의견)
+- 슬롯수변동을 숫자로 표시
+- 비교 주차 데이터 테이블 병합
+- 비교 주차 차트 동시 표시 (grouped bar)
 """
 
 import dash
@@ -29,6 +33,15 @@ def format_currency(value):
         if pd.isna(value) or value == 0:
             return "0원"
         return f"{int(value):,}원"
+    except:
+        return "N/A"
+
+def format_number(value):
+    """숫자를 천단위 콤마로 표시 (예: 1,234)"""
+    try:
+        if pd.isna(value):
+            return "N/A"
+        return f"{int(value):,}"
     except:
         return "N/A"
 
@@ -239,14 +252,26 @@ def update_column_selector(json_data):
     
     df = pd.read_json(io.StringIO(json_data), orient='split')
     
-    # Get numeric columns
-    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+    # Get all columns except text-only columns
+    all_cols = df.columns.tolist()
     
     # Exclude certain columns
-    exclude_cols = ['주차']
+    exclude_cols = ['상품명', '주차']
+    selectable_cols = [col for col in all_cols if col not in exclude_cols]
+    
+    # Prioritize numeric columns
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
     numeric_cols = [col for col in numeric_cols if col not in exclude_cols]
     
-    options = [{'label': col, 'value': col} for col in numeric_cols]
+    # Add text columns (쇼핑몰, 특이사항, 의견)
+    text_cols = [col for col in selectable_cols if col not in numeric_cols]
+    
+    # Combine: numeric first, then text
+    final_cols = numeric_cols + text_cols
+    
+    options = [{'label': col, 'value': col} for col in final_cols]
+    
+    # Default: select first 5 numeric columns
     default_values = numeric_cols[:5] if len(numeric_cols) >= 5 else numeric_cols
     
     return options, default_values
@@ -298,32 +323,50 @@ def update_kpi_cards(json_data, selected_week, compare_week):
     Output('data-table-container', 'children'),
     [Input('stored-data', 'data'),
      Input('week-selector', 'value'),
+     Input('compare-week-selector', 'value'),
      Input('column-selector', 'value')]
 )
-def update_data_table(json_data, selected_week, selected_columns):
+def update_data_table(json_data, selected_week, compare_week, selected_columns):
     if json_data is None or selected_week is None:
         return html.Div("데이터를 업로드하고 주차를 선택하세요.", className="text-muted")
     
     df = pd.read_json(io.StringIO(json_data), orient='split')
     
-    # Filter by week
+    # Filter by weeks
     if '주차' in df.columns:
-        df_filtered = df[df['주차'] == selected_week]
+        if compare_week and compare_week != selected_week:
+            # Show both weeks
+            df_filtered = df[df['주차'].isin([selected_week, compare_week])]
+        else:
+            # Show only selected week
+            df_filtered = df[df['주차'] == selected_week]
     else:
         df_filtered = df
     
     # Select columns to display
-    display_cols = ['상품명', '주차'] + (selected_columns if selected_columns else [])
+    base_cols = ['상품명', '주차']
+    display_cols = base_cols + (selected_columns if selected_columns else [])
     display_cols = [col for col in display_cols if col in df_filtered.columns]
     
     df_display = df_filtered[display_cols].copy()
     
-    # Format numeric columns
+    # Format columns
     for col in df_display.columns:
-        if df_display[col].dtype in ['float64', 'int64']:
-            if '이익률' in col or 'ROI' in col or '변동' in col:
+        if col in ['상품명', '주차', '쇼핑몰', '특이사항', '의견']:
+            # Text columns - keep as is
+            continue
+        elif df_display[col].dtype in ['float64', 'int64']:
+            if '이익률' in col or 'ROI' in col:
+                # Percentage columns
                 df_display[col] = df_display[col].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+            elif '슬롯수변동' in col:
+                # 슬롯수변동: 숫자로 표시 (% 아님)
+                df_display[col] = df_display[col].apply(lambda x: f"{int(x)}" if pd.notna(x) else "N/A")
+            elif '슬롯수' in col:
+                # 슬롯수: 정수로 표시
+                df_display[col] = df_display[col].apply(lambda x: f"{int(x)}" if pd.notna(x) else "N/A")
             else:
+                # 금액 컬럼: 천단위 콤마
                 df_display[col] = df_display[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
     
     table = dash_table.DataTable(
@@ -336,7 +379,8 @@ def update_data_table(json_data, selected_week, selected_columns):
         style_cell={
             'textAlign': 'left',
             'padding': '10px',
-            'fontFamily': 'Arial, sans-serif'
+            'fontFamily': 'Arial, sans-serif',
+            'minWidth': '100px'
         },
         style_header={
             'backgroundColor': '#007bff',
@@ -347,6 +391,11 @@ def update_data_table(json_data, selected_week, selected_columns):
             {
                 'if': {'row_index': 'odd'},
                 'backgroundColor': '#f8f9fa'
+            },
+            {
+                'if': {'column_id': '주차'},
+                'fontWeight': 'bold',
+                'backgroundColor': '#e7f3ff'
             }
         ]
     )
@@ -357,56 +406,145 @@ def update_data_table(json_data, selected_week, selected_columns):
     Output('charts-container', 'children'),
     [Input('stored-data', 'data'),
      Input('week-selector', 'value'),
+     Input('compare-week-selector', 'value'),
      Input('column-selector', 'value')]
 )
-def update_charts(json_data, selected_week, selected_columns):
+def update_charts(json_data, selected_week, compare_week, selected_columns):
     if json_data is None or selected_week is None or not selected_columns:
         return html.Div("컬럼을 선택하면 차트가 표시됩니다.", className="text-muted")
     
     df = pd.read_json(io.StringIO(json_data), orient='split')
     
-    # Filter by week
-    if '주차' in df.columns:
-        df_filtered = df[df['주차'] == selected_week]
-    else:
-        df_filtered = df
+    # Check if compare mode
+    compare_mode = compare_week and compare_week != selected_week and '주차' in df.columns
     
     charts = []
     
     for col in selected_columns:
-        if col not in df_filtered.columns:
+        if col not in df.columns:
             continue
         
-        # Bar chart (Top 20)
-        df_sorted = df_filtered.nlargest(20, col) if col in df_filtered.columns else df_filtered
+        # Skip text columns for charts
+        if col in ['쇼핑몰', '특이사항', '의견']:
+            continue
         
-        if '상품명' in df_filtered.columns:
-            fig_bar = px.bar(
-                df_sorted,
-                x='상품명',
-                y=col,
-                title=f"{col} - 상위 20개 상품",
-                labels={col: col, '상품명': '상품명'}
+        # Check if numeric
+        if df[col].dtype not in ['float64', 'int64']:
+            continue
+        
+        if compare_mode:
+            # Grouped bar chart for comparison
+            df_selected = df[df['주차'] == selected_week].nlargest(20, col) if col in df.columns else df[df['주차'] == selected_week]
+            df_compare = df[df['주차'] == compare_week]
+            
+            # Merge data
+            if '상품명' in df.columns:
+                product_names = df_selected['상품명'].tolist()
+                
+                fig = go.Figure()
+                
+                # Selected week
+                fig.add_trace(go.Bar(
+                    name=f'{selected_week}',
+                    x=product_names,
+                    y=df_selected[col].tolist(),
+                    marker_color='#3b82f6',
+                    hovertemplate='<b>%{x}</b><br>' + col + ': %{y:,.0f}원<extra></extra>' if '이익률' not in col and 'ROI' not in col and '%' not in col else '<b>%{x}</b><br>' + col + ': %{y:.1f}%<extra></extra>'
+                ))
+                
+                # Compare week
+                compare_values = []
+                for product in product_names:
+                    val = df_compare[df_compare['상품명'] == product][col].values
+                    compare_values.append(val[0] if len(val) > 0 else 0)
+                
+                fig.add_trace(go.Bar(
+                    name=f'{compare_week}',
+                    x=product_names,
+                    y=compare_values,
+                    marker_color='#f97316',
+                    hovertemplate='<b>%{x}</b><br>' + col + ': %{y:,.0f}원<extra></extra>' if '이익률' not in col and 'ROI' not in col and '%' not in col else '<b>%{x}</b><br>' + col + ': %{y:.1f}%<extra></extra>'
+                ))
+                
+                fig.update_layout(
+                    title=f"{col} 비교 - 상위 20개 상품 ({selected_week} vs {compare_week})",
+                    xaxis_title="상품명",
+                    yaxis_title=col,
+                    barmode='group',
+                    xaxis_tickangle=-45,
+                    height=500,
+                    hovermode='x unified'
+                )
+                
+                # Format y-axis
+                if '이익률' in col or 'ROI' in col or '%' in col:
+                    fig.update_yaxes(ticksuffix='%')
+                else:
+                    fig.update_yaxes(tickformat=',', ticksuffix='원')
+                
+                charts.append(dbc.Col([
+                    dcc.Graph(figure=fig)
+                ], md=12))
+        
+        else:
+            # Single week chart
+            df_filtered = df[df['주차'] == selected_week] if '주차' in df.columns else df
+            df_sorted = df_filtered.nlargest(20, col) if col in df_filtered.columns else df_filtered
+            
+            if '상품명' in df_filtered.columns:
+                fig = go.Figure()
+                
+                fig.add_trace(go.Bar(
+                    x=df_sorted['상품명'],
+                    y=df_sorted[col],
+                    marker_color='#3b82f6',
+                    hovertemplate='<b>%{x}</b><br>' + col + ': %{y:,.0f}원<extra></extra>' if '이익률' not in col and 'ROI' not in col and '%' not in col else '<b>%{x}</b><br>' + col + ': %{y:.1f}%<extra></extra>'
+                ))
+                
+                fig.update_layout(
+                    title=f"{col} - 상위 20개 상품",
+                    xaxis_title="상품명",
+                    yaxis_title=col,
+                    xaxis_tickangle=-45,
+                    height=400
+                )
+                
+                # Format y-axis
+                if '이익률' in col or 'ROI' in col or '%' in col:
+                    fig.update_yaxes(ticksuffix='%')
+                else:
+                    fig.update_yaxes(tickformat=',', ticksuffix='원')
+                
+                charts.append(dbc.Col([
+                    dcc.Graph(figure=fig)
+                ], md=6))
+            
+            # Histogram
+            fig_hist = go.Figure()
+            
+            fig_hist.add_trace(go.Histogram(
+                x=df_filtered[col],
+                nbinsx=30,
+                marker_color='#8b5cf6',
+                hovertemplate=col + ': %{x:,.0f}원<br>개수: %{y}<extra></extra>' if '이익률' not in col and 'ROI' not in col and '%' not in col else col + ': %{x:.1f}%<br>개수: %{y}<extra></extra>'
+            ))
+            
+            fig_hist.update_layout(
+                title=f"{col} 분포",
+                xaxis_title=col,
+                yaxis_title="개수",
+                height=400
             )
-            fig_bar.update_layout(xaxis_tickangle=-45, height=400)
+            
+            # Format x-axis
+            if '이익률' in col or 'ROI' in col or '%' in col:
+                fig_hist.update_xaxes(ticksuffix='%')
+            else:
+                fig_hist.update_xaxes(tickformat=',', ticksuffix='원')
             
             charts.append(dbc.Col([
-                dcc.Graph(figure=fig_bar)
+                dcc.Graph(figure=fig_hist)
             ], md=6))
-        
-        # Histogram
-        fig_hist = px.histogram(
-            df_filtered,
-            x=col,
-            nbins=30,
-            title=f"{col} 분포",
-            labels={col: col}
-        )
-        fig_hist.update_layout(height=400)
-        
-        charts.append(dbc.Col([
-            dcc.Graph(figure=fig_hist)
-        ], md=6))
     
     return dbc.Row(charts)
 
