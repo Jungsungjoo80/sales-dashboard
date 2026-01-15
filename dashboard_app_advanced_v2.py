@@ -66,7 +66,7 @@ def format_percentage(value):
 
 def calculate_derived_fields(df):
     """
-    계산 필드 자동 생성
+    계산 필드 자동 생성 (에러 방지 버전)
     - 순이익 = 이익 - 트래픽비용
     - 이익률 = (이익 / 매출) * 100
     - 이익률변동 = 현재 주차 이익률 - 이전 주차 이익률
@@ -74,30 +74,29 @@ def calculate_derived_fields(df):
     """
     df = df.copy()
     
+    # 숫자 컬럼을 강제로 숫자형으로 변환 (에러 방지)
+    numeric_cols = ['이익', '매출', '트래픽비용', '슬롯수', '이익률', '이익률변동', '슬롯수변동']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+    
     # 1. 순이익 계산
     if '이익' in df.columns and '트래픽비용' in df.columns:
         df['순이익'] = df['이익'] - df['트래픽비용']
-        # 기존 순이익 컬럼이 있다면 제거하고 계산값 사용
-        if '순이익_원본' not in df.columns:
-            df['순이익_원본'] = df['순이익']
     
     # 2. 이익률 계산
     if '이익' in df.columns and '매출' in df.columns:
         df['이익률'] = ((df['이익'] / df['매출']) * 100).fillna(0)
-        # 기존 이익률 컬럼이 있다면 제거하고 계산값 사용
-        if '이익률_원본' not in df.columns:
-            df['이익률_원본'] = df['이익률']
     
     # 3. 주차별 이익률변동 및 슬롯수변동 계산
     if '주차' in df.columns and '상품명' in df.columns:
-        # 주차를 날짜 순으로 정렬
-        weeks = sorted(df['주차'].unique())
-        
-        # 각 상품별로 이전 주차와 비교
         df['이익률변동'] = 0.0
         df['슬롯수변동'] = 0
         
         for product in df['상품명'].unique():
+            if pd.isna(product):
+                continue
+                
             product_data = df[df['상품명'] == product].sort_values('주차')
             
             if len(product_data) > 1:
@@ -107,15 +106,21 @@ def calculate_derived_fields(df):
                     
                     # 이익률변동 계산
                     if '이익률' in df.columns:
-                        curr_roi = df.at[curr_idx, '이익률']
-                        prev_roi = df.at[prev_idx, '이익률']
-                        df.at[curr_idx, '이익률변동'] = curr_roi - prev_roi
+                        try:
+                            curr_roi = float(df.at[curr_idx, '이익률'])
+                            prev_roi = float(df.at[prev_idx, '이익률'])
+                            df.at[curr_idx, '이익률변동'] = curr_roi - prev_roi
+                        except:
+                            df.at[curr_idx, '이익률변동'] = 0.0
                     
                     # 슬롯수변동 계산
                     if '슬롯수' in df.columns:
-                        curr_slots = df.at[curr_idx, '슬롯수'] if pd.notna(df.at[curr_idx, '슬롯수']) else 0
-                        prev_slots = df.at[prev_idx, '슬롯수'] if pd.notna(df.at[prev_idx, '슬롯수']) else 0
-                        df.at[curr_idx, '슬롯수변동'] = int(curr_slots - prev_slots)
+                        try:
+                            curr_slots = float(df.at[curr_idx, '슬롯수']) if pd.notna(df.at[curr_idx, '슬롯수']) else 0
+                            prev_slots = float(df.at[prev_idx, '슬롯수']) if pd.notna(df.at[prev_idx, '슬롯수']) else 0
+                            df.at[curr_idx, '슬롯수변동'] = int(curr_slots - prev_slots)
+                        except:
+                            df.at[curr_idx, '슬롯수변동'] = 0
     
     return df
 
