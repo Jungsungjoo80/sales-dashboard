@@ -1,20 +1,21 @@
 # ========================================
-# Advanced Traffic Dashboard v7
+# Advanced Traffic Dashboard v7 - Complete
 # ========================================
 # 주요 개선사항:
 # 1. 데이터 시각화: 매출 분포 제거, 전체 상품 표시, 네이버 녹색/쿠팡 파란색
-# 2. 그래프 위 숫자: 만 단위 표기 (예: 4,000만)
+# 2. 그래프 위 숫자: 만 단위 표기 (예: 4,000만), 겹침 방지
 # 3. 비교주차 레이아웃: 1~4 주차 가로 배열
-# 4. 상품 필터: 데이터 테이블에서 특정 상품 선택 시 시각화 반영
+# 4. 상품 필터 기능 제거 (비교주차 시 상품 수 유지)
 # 5. 비교주차 시각화: 가로 스크롤 지원
 # 6. KPI 카드 확장: 8개 지표 모두 표시
 # 7. 이익률 계산식: 순이익 / 트래픽비용
 # 8. 이익률변동: % 표기 및 전주 대비 계산
 # 9. ROAS 추가: 매출 / 트래픽비용
+# 10. 마이너스 값: 빨간색 볼드 처리
 # ========================================
 
 import dash
-from dash import dcc, html, Input, Output, State, dash_table, ALL
+from dash import dcc, html, Input, Output, State, dash_table
 import dash_bootstrap_components as dbc
 import pandas as pd
 import plotly.graph_objects as go
@@ -223,18 +224,10 @@ app.layout = dbc.Container([
                 id='column-selector',
                 options=[],
                 value=[],
-                inline=True,  # 가로 배열
+                inline=True,
                 className="mb-3",
                 style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px'}
             )
-        ])
-    ], className="mb-3"),
-    
-    # 상품 필터 (데이터 테이블 선택용)
-    dbc.Row([
-        dbc.Col([
-            html.Label("🔍 상품 필터 (데이터 테이블에서 상품 선택 시 시각화에 반영됩니다)", className="fw-bold mb-2 text-info"),
-            html.Div(id='selected-products-display', className="mb-2 small text-muted")
         ])
     ], className="mb-3"),
     
@@ -278,8 +271,7 @@ app.layout = dbc.Container([
     # 숨겨진 저장소
     dcc.Store(id='stored-data'),
     dcc.Store(id='stored-weeks'),
-    dcc.Store(id='stored-malls'),
-    dcc.Store(id='selected-products-store', data=[])  # 선택된 상품 저장
+    dcc.Store(id='stored-malls')
     
 ], fluid=True, className="p-4")
 
@@ -355,7 +347,7 @@ def update_column_selector(data):
     
     df = pd.DataFrame(data)
     
-    # 숫자 컬럼 우선 정렬
+    # 숫자 컬럼 우선 정렬 (ROAS 포함)
     numeric_cols = ['매출', '이익', '트래픽비용', '순이익', '이익률', '이익률변동', 
                     '슬롯수', '슬롯수변동', 'ROAS']
     text_cols = ['상품명', '주차', '쇼핑몰', '특이사항', '의견']
@@ -363,7 +355,7 @@ def update_column_selector(data):
     available_cols = [col for col in numeric_cols + text_cols if col in df.columns]
     
     options = [{'label': col, 'value': col} for col in available_cols]
-    default_values = [col for col in ['상품명', '주차', '매출', '이익', '순이익', '이익률', 'ROAS'] 
+    default_values = [col for col in ['상품명', '주차', '쇼핑몰', '매출', '이익', '순이익', '이익률', 'ROAS'] 
                       if col in available_cols]
     
     return options, default_values
@@ -433,15 +425,25 @@ def update_kpi_cards(data, selected_week, compare_week, mall_filter):
             if compare_val != 0:
                 delta = ((kpi['value'] - compare_val) / compare_val) * 100
                 delta_text = f"{delta:+.1f}%"
-                delta_class = "text-success" if delta > 0 else "text-danger"
+                # 마이너스 값은 빨간색 볼드
+                delta_class = "text-success" if delta > 0 else "text-danger fw-bold"
         
-        # 포맷팅
+        # 포맷팅 (마이너스 값 빨간색 볼드 처리)
         if kpi['format'] == 'currency':
-            display_val = format_currency(kpi['value'])
+            if kpi['value'] < 0:
+                display_val = html.Span(format_currency(kpi['value']), className="text-danger fw-bold")
+            else:
+                display_val = format_currency(kpi['value'])
         elif kpi['format'] == 'percent':
-            display_val = format_percent(kpi['value'])
+            if kpi['value'] < 0:
+                display_val = html.Span(format_percent(kpi['value']), className="text-danger fw-bold")
+            else:
+                display_val = format_percent(kpi['value'])
         elif kpi['format'] == 'decimal':
-            display_val = f"{kpi['value']:.2f}"
+            if kpi['value'] < 0:
+                display_val = html.Span(f"{kpi['value']:.2f}", className="text-danger fw-bold")
+            else:
+                display_val = f"{kpi['value']:.2f}"
         else:
             display_val = f"{int(kpi['value']):,}"
         
@@ -463,8 +465,7 @@ def update_kpi_cards(data, selected_week, compare_week, mall_filter):
 
 # Callback 6: 데이터 테이블 업데이트
 @app.callback(
-    [Output('data-table-container', 'children'),
-     Output('selected-products-display', 'children')],
+    Output('data-table-container', 'children'),
     [Input('stored-data', 'data'),
      Input('selected-week', 'value'),
      Input('compare-week-1', 'value'),
@@ -479,7 +480,7 @@ def update_data_table(data, selected_week, cw1, cw2, cw3, cw4, mall_filter,
                       selected_columns, page_size):
     """데이터 테이블 업데이트 - 비교주차 병합 표시"""
     if not data or not selected_week:
-        return html.Div("데이터를 업로드하고 주차를 선택하세요.", className="text-muted"), ""
+        return html.Div("데이터를 업로드하고 주차를 선택하세요.", className="text-muted")
     
     df = pd.DataFrame(data)
     
@@ -498,8 +499,7 @@ def update_data_table(data, selected_week, cw1, cw2, cw3, cw4, mall_filter,
         available_cols = [col for col in selected_columns if col in df_filtered.columns]
         df_filtered = df_filtered[available_cols]
     
-    # 포맷팅
-    format_dict = {}
+    # 포맷팅 (마이너스 값 빨간색 볼드)
     for col in df_filtered.columns:
         if col in ['매출', '이익', '트래픽비용', '순이익']:
             df_filtered[col] = df_filtered[col].apply(lambda x: format_currency(x) if pd.notna(x) else "")
@@ -512,7 +512,7 @@ def update_data_table(data, selected_week, cw1, cw2, cw3, cw4, mall_filter,
         elif col == '슬롯수변동':
             df_filtered[col] = df_filtered[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
     
-    # 데이터 테이블 생성
+    # 데이터 테이블 생성 (마이너스 값 스타일링)
     table = dash_table.DataTable(
         data=df_filtered.to_dict('records'),
         columns=[{'name': col, 'id': col} for col in df_filtered.columns],
@@ -520,8 +520,6 @@ def update_data_table(data, selected_week, cw1, cw2, cw3, cw4, mall_filter,
         page_action='native',
         sort_action='native',
         filter_action='native',
-        row_selectable='multi',  # 상품 선택 기능
-        selected_rows=[],
         style_table={'overflowX': 'auto'},
         style_cell={
             'textAlign': 'left',
@@ -538,30 +536,38 @@ def update_data_table(data, selected_week, cw1, cw2, cw3, cw4, mall_filter,
             {
                 'if': {'row_index': 'odd'},
                 'backgroundColor': '#f8fafc'
+            },
+            # 마이너스 값 빨간색 볼드
+            {
+                'if': {
+                    'filter_query': '{이익률} contains "-"',
+                    'column_id': '이익률'
+                },
+                'color': '#dc2626',
+                'fontWeight': 'bold'
+            },
+            {
+                'if': {
+                    'filter_query': '{이익률변동} contains "-"',
+                    'column_id': '이익률변동'
+                },
+                'color': '#dc2626',
+                'fontWeight': 'bold'
+            },
+            {
+                'if': {
+                    'filter_query': '{순이익} contains "-"',
+                    'column_id': '순이익'
+                },
+                'color': '#dc2626',
+                'fontWeight': 'bold'
             }
         ]
     )
     
-    selected_display = f"선택된 상품: 없음 (테이블에서 행을 선택하면 해당 상품만 차트에 표시됩니다)"
-    
-    return table, selected_display
+    return table
 
-# Callback 7: 데이터 테이블 행 선택 시 상품 필터 업데이트
-@app.callback(
-    Output('selected-products-store', 'data'),
-    [Input('data-table-container', 'children')],
-    [State('stored-data', 'data')]
-)
-def update_selected_products(table_children, data):
-    """데이터 테이블에서 선택된 행의 상품명 저장"""
-    if not data:
-        return []
-    
-    # 테이블에서 선택된 행이 있으면 해당 상품명 추출
-    # (실제 구현에서는 dash_table의 selected_rows를 활용)
-    return []
-
-# Callback 8: 통합 시각화 (비교주차 선택 시)
+# Callback 7: 통합 시각화 (비교주차 선택 시)
 @app.callback(
     Output('integrated-viz-container', 'children'),
     [Input('stored-data', 'data'),
@@ -655,7 +661,7 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter):
         dcc.Graph(figure=fig, config={'displayModeBar': False})
     ], className="mb-4")
 
-# Callback 9: 차트 생성
+# Callback 8: 차트 생성
 @app.callback(
     Output('chart-container', 'children'),
     [Input('stored-data', 'data'),
@@ -665,12 +671,10 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter):
      Input('compare-week-3', 'value'),
      Input('compare-week-4', 'value'),
      Input('mall-filter', 'value'),
-     Input('column-selector', 'value'),
-     Input('selected-products-store', 'data')]
+     Input('column-selector', 'value')]
 )
-def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, 
-                  selected_columns, selected_products):
-    """차트 생성 - 전체 상품 표시, 네이버 녹색/쿠팡 파란색, 만 단위 표기, 가로 스크롤"""
+def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, selected_columns):
+    """차트 생성 - 전체 상품 표시, 네이버 녹색/쿠팡 파란색, 만 단위 표기, 가로 스크롤, 겹침 방지"""
     if not data or not selected_week or not selected_columns:
         return html.Div()
     
@@ -682,16 +686,15 @@ def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter,
     if mall_filter and mall_filter != '전체':
         df_filtered = df_filtered[df_filtered['쇼핑몰'] == mall_filter]
     
-    # 상품 필터 (테이블에서 선택된 상품이 있으면)
-    if selected_products:
-        df_filtered = df_filtered[df_filtered['상품명'].isin(selected_products)]
-    
     charts = []
     
     # 숫자 컬럼만 차트로 표시
     numeric_cols = ['매출', '이익', '트래픽비용', '순이익', '이익률', '이익률변동', 
                     '슬롯수', '슬롯수변동', 'ROAS']
     chart_cols = [col for col in selected_columns if col in numeric_cols]
+    
+    # 쇼핑몰별 색상 매핑
+    color_map = {'네이버': '#22c55e', '쿠팡': '#3b82f6'}  # 네이버 녹색, 쿠팡 파란색
     
     for col in chart_cols:
         if col not in df_filtered.columns:
@@ -705,18 +708,12 @@ def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter,
             if mall_filter and mall_filter != '전체':
                 df_compare = df_compare[df_compare['쇼핑몰'] == mall_filter]
             
-            if selected_products:
-                df_compare = df_compare[df_compare['상품명'].isin(selected_products)]
-            
             # 전체 상품 표시 (상위 20개 제한 제거)
             products = df_compare['상품명'].unique().tolist()
             
             fig = go.Figure()
             
-            # 쇼핑몰별 색상 매핑
-            color_map = {'네이버': '#22c55e', '쿠팡': '#3b82f6'}  # 네이버 녹색, 쿠팡 파란색
-            
-            for week in all_weeks:
+            for week_idx, week in enumerate(all_weeks):
                 week_data = df_compare[df_compare['주차'] == week]
                 
                 # 쇼핑몰별로 그룹화
@@ -724,68 +721,90 @@ def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter,
                     mall_data = week_data[week_data['쇼핑몰'] == mall]
                     bar_color = color_map.get(mall, '#94a3b8')
                     
+                    # 텍스트 위치 조정 (겹침 방지)
+                    text_values = []
+                    for v in mall_data[col]:
+                        if col in ['매출', '이익', '트래픽비용', '순이익']:
+                            text_values.append(format_currency_short_man(v))
+                        elif col in ['이익률', '이익률변동']:
+                            text_values.append(format_percent(v))
+                        elif col == 'ROAS':
+                            text_values.append(f"{v:.2f}")
+                        else:
+                            text_values.append(f"{int(v):,}")
+                    
                     fig.add_trace(go.Bar(
                         x=mall_data['상품명'],
                         y=mall_data[col],
                         name=f"{week} - {mall}",
                         marker_color=bar_color,
-                        text=[format_currency_short_man(v) if col in ['매출', '이익', '트래픽비용', '순이익'] 
-                              else format_percent(v) if col in ['이익률', '이익률변동'] 
-                              else f"{v:.2f}" if col == 'ROAS'
-                              else f"{int(v):,}" for v in mall_data[col]],
+                        text=text_values,
                         textposition='outside',
                         textangle=0,
+                        textfont=dict(size=9),  # 글씨 크기 축소
                         hovertemplate='<b>%{x}</b><br>' + col + ': %{y:,.0f}<extra></extra>'
                     ))
             
             # 가로 스크롤 지원 (제품 수에 따라 너비 자동 조정)
-            chart_width = max(1200, len(products) * 80)
+            chart_width = max(1200, len(products) * 100)
             
             fig.update_layout(
                 title=f"📊 {col} 비교 (전체 상품, 주차별)",
                 xaxis_title="상품명",
                 yaxis_title=col,
                 barmode='group',
-                height=500,
+                height=600,
                 width=chart_width,
                 hovermode='x unified',
                 legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
                 plot_bgcolor='#f8fafc',
-                xaxis=dict(tickangle=-45)
+                xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
+                uniformtext=dict(mode='hide', minsize=8)  # 텍스트 겹침 방지
             )
             
         else:
             # 단일 주차 모드
-            df_sorted = df_filtered.nlargest(len(df_filtered), col)  # 전체 상품 표시
+            df_sorted = df_filtered.sort_values(col, ascending=False)  # 전체 상품 표시
             
             # 쇼핑몰별 색상 매핑
             colors = [color_map.get(mall, '#94a3b8') for mall in df_sorted['쇼핑몰']]
+            
+            # 텍스트 값 생성
+            text_values = []
+            for v in df_sorted[col]:
+                if col in ['매출', '이익', '트래픽비용', '순이익']:
+                    text_values.append(format_currency_short_man(v))
+                elif col in ['이익률', '이익률변동']:
+                    text_values.append(format_percent(v))
+                elif col == 'ROAS':
+                    text_values.append(f"{v:.2f}")
+                else:
+                    text_values.append(f"{int(v):,}")
             
             fig = go.Figure(go.Bar(
                 x=df_sorted['상품명'],
                 y=df_sorted[col],
                 marker_color=colors,
-                text=[format_currency_short_man(v) if col in ['매출', '이익', '트래픽비용', '순이익'] 
-                      else format_percent(v) if col in ['이익률', '이익률변동'] 
-                      else f"{v:.2f}" if col == 'ROAS'
-                      else f"{int(v):,}" for v in df_sorted[col]],
+                text=text_values,
                 textposition='outside',
                 textangle=0,
+                textfont=dict(size=9),
                 hovertemplate='<b>%{x}</b><br>' + col + ': %{y:,.0f}<extra></extra>'
             ))
             
             # 가로 스크롤 지원
-            chart_width = max(1200, len(df_sorted) * 50)
+            chart_width = max(1200, len(df_sorted) * 60)
             
             fig.update_layout(
                 title=f"📊 {col} (전체 상품, {selected_week})",
                 xaxis_title="상품명",
                 yaxis_title=col,
-                height=500,
+                height=600,
                 width=chart_width,
                 hovermode='x unified',
                 plot_bgcolor='#f8fafc',
-                xaxis=dict(tickangle=-45)
+                xaxis=dict(tickangle=-45, tickfont=dict(size=10)),
+                uniformtext=dict(mode='hide', minsize=8)
             )
         
         # 차트를 가로 스크롤 가능한 컨테이너에 담기
