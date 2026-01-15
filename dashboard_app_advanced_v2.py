@@ -577,7 +577,7 @@ def update_data_table(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, sele
     
     return df_display.to_dict('records'), columns, page_size
 
-# Callback 7: 통합 시각화 (컬럼 선택 반영 + 숫자 겹침 방지)
+# Callback 7: 통합 시각화 (수정 버전 - 비어있을 때 기본값 강제 설정)
 @app.callback(
     Output('integrated-viz', 'figure'),
     [Input('stored-data', 'data'),
@@ -587,7 +587,7 @@ def update_data_table(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, sele
      Input('compare-week-3', 'value'),
      Input('compare-week-4', 'value'),
      Input('mall-filter', 'value'),
-     Input('column-selector', 'value')]  # 🔥 핵심: 컬럼 선택 반영
+     Input('column-selector', 'value')]
 )
 def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, selected_columns):
     if not data or not selected_week:
@@ -610,16 +610,35 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, 
     if mall_filter and mall_filter != 'all':
         df_filtered = df_filtered[df_filtered['쇼핑몰'] == mall_filter]
     
-    # 🔥 선택된 컬럼만 표시
+    # 🔥 핵심 수정: selected_columns가 비어있거나 None일 때 기본값 강제 설정
     if not selected_columns:
-        selected_columns = ['매출', '이익', '트래픽비용']  # 기본값
+        # 데이터프레임에 존재하는 기본 컬럼만 선택
+        default_cols = ['매출', '이익', '트래픽비용', '순이익', 'ROAS']
+        selected_columns = [col for col in default_cols if col in df_filtered.columns]
+        
+        # 여전히 비어있으면 모든 숫자형 컬럼 선택
+        if not selected_columns:
+            numeric_cols = df_filtered.select_dtypes(include=['number']).columns.tolist()
+            selected_columns = [col for col in numeric_cols if col not in ['주차']][:5]
     
-    # 주차별 집계
+    # 데이터 집계 딕셔너리 생성
     agg_dict = {}
     for col in selected_columns:
         if col in df_filtered.columns:
-            agg_dict[col] = 'sum' if col in ['매출', '이익', '트래픽비용', '순이익', '슬롯수'] else 'mean'
+            # 합계가 필요한 컬럼 vs 평균이 필요한 컬럼 구분
+            if col in ['매출', '이익', '트래픽비용', '순이익', '슬롯수', '슬롯수변동']:
+                agg_dict[col] = 'sum'
+            else:
+                agg_dict[col] = 'mean'
     
+    # 집계 딕셔너리가 비어있으면 기본 컬럼 추가
+    if not agg_dict:
+        if '매출' in df_filtered.columns:
+            agg_dict['매출'] = 'sum'
+        if '이익' in df_filtered.columns:
+            agg_dict['이익'] = 'sum'
+    
+    # 주차별 집계
     df_agg = df_filtered.groupby('주차').agg(agg_dict).reset_index()
     
     # 주차 순서 정렬
@@ -629,26 +648,26 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, 
     # 차트 생성
     fig = go.Figure()
     
-    # 🔥 textposition 차별화 전략 (겹침 방지)
+    # textposition 차별화 전략 (겹침 방지)
     text_positions = ['top center', 'bottom center', 'middle left', 'middle right', 
                       'top left', 'top right', 'bottom left', 'bottom right']
+    
+    # 컬럼별 색상 및 스타일 정의
+    col_styles = {
+        '매출': {'color': '#3b82f6', 'type': 'bar', 'yaxis': 'y'},
+        '이익': {'color': '#10b981', 'type': 'line', 'yaxis': 'y2'},
+        '트래픽비용': {'color': '#f59e0b', 'type': 'line', 'yaxis': 'y2'},
+        '순이익': {'color': '#ef4444', 'type': 'line', 'yaxis': 'y2'},
+        '슬롯수': {'color': '#8b5cf6', 'type': 'line', 'yaxis': 'y2'},
+        'ROAS': {'color': '#ec4899', 'type': 'line', 'yaxis': 'y2'},
+        '이익률': {'color': '#06b6d4', 'type': 'line', 'yaxis': 'y2'},
+        '이익률변동': {'color': '#84cc16', 'type': 'line', 'yaxis': 'y2'},
+        '슬롯수변동': {'color': '#f97316', 'type': 'line', 'yaxis': 'y2'}
+    }
     
     for idx, col in enumerate(selected_columns):
         if col not in df_agg.columns:
             continue
-        
-        # 컬럼별 색상 및 스타일 정의
-        col_styles = {
-            '매출': {'color': '#3b82f6', 'type': 'bar', 'yaxis': 'y'},
-            '이익': {'color': '#10b981', 'type': 'line', 'yaxis': 'y2'},
-            '트래픽비용': {'color': '#f59e0b', 'type': 'line', 'yaxis': 'y2'},
-            '순이익': {'color': '#ef4444', 'type': 'line', 'yaxis': 'y2'},
-            '슬롯수': {'color': '#8b5cf6', 'type': 'line', 'yaxis': 'y2'},
-            'ROAS': {'color': '#ec4899', 'type': 'line', 'yaxis': 'y2'},
-            '이익률': {'color': '#06b6d4', 'type': 'line', 'yaxis': 'y2'},
-            '이익률변동': {'color': '#84cc16', 'type': 'line', 'yaxis': 'y2'},
-            '슬롯수변동': {'color': '#f97316', 'type': 'line', 'yaxis': 'y2'}
-        }
         
         style = col_styles.get(col, {'color': '#6366f1', 'type': 'line', 'yaxis': 'y2'})
         
@@ -660,7 +679,7 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, 
         else:
             text_values = [f"{int(v):,}" for v in df_agg[col]]
         
-        # 🔥 textposition 순환 할당 (겹침 방지)
+        # textposition 순환 할당 (겹침 방지)
         text_pos = text_positions[idx % len(text_positions)]
         
         if style['type'] == 'bar':
@@ -670,7 +689,7 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, 
                 name=col,
                 marker_color=style['color'],
                 text=text_values,
-                textposition=text_pos,  # 🔥 차별화된 위치
+                textposition=text_pos,
                 yaxis=style['yaxis'],
                 hovertemplate=f'<b>%{{x}}</b><br>{col}: %{{text}}<extra></extra>'
             ))
@@ -683,7 +702,7 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, 
                 line=dict(color=style['color'], width=3),
                 marker=dict(size=10),
                 text=text_values,
-                textposition=text_pos,  # 🔥 차별화된 위치
+                textposition=text_pos,
                 yaxis=style['yaxis'],
                 hovertemplate=f'<b>%{{x}}</b><br>{col}: %{{text}}<extra></extra>'
             ))
@@ -709,7 +728,7 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, 
         ),
         hovermode='x unified',
         height=450,
-        margin=dict(t=150, b=50, l=80, r=80),  # 🔥 상단 여백 증가
+        margin=dict(t=150, b=50, l=80, r=80),
         legend=dict(
             orientation='h',
             yanchor='bottom',
