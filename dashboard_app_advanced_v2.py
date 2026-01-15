@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
 """
 LABONLAB 트래픽 데이터 분석 대시보드 v7 (최종 완성)
-Advanced Traffic Dashboard v7 - Complete
+Advanced Traffic Dashboard v7 - Final Complete
 
 주요 개선사항:
-1) ROAS 퍼센트(%) 표시
-2) Y축 금액 표기: 200M → 2,000만 형식
-3) 숫자 겹침 방지 및 모든 숫자 가시화
-4) 쇼핑몰 필터 위치 변경 (선택주차 아래)
-5) 데이터 테이블 컬럼 순서 변경
-6) Y축 범위 자동 조정 (높은/낮은 수치 모두 표시)
-7) 모든 차트에 숫자 표기
+1) 모든 차트 상단 여백 증가 (숫자 잘림 방지)
+2) 통합 시각화에 '표시할 컬럼 선택' 기능 반영
+3) 통합 시각화 숫자 겹침 방지 (textposition 차별화)
+4) 개별 차트 숫자 표기 최적화 (호버 + 상위 5개만 레이블)
+5) ROAS 퍼센트(%) 표시
+6) Y축 금액 표기: 만 단위 형식
+7) 데이터 테이블 컬럼 순서 변경
+8) 쇼핑몰 필터 위치 변경
 """
 
 import dash
-from dash import dcc, html, dash_table, Input, Output, State, callback_context
+from dash import dcc, html, dash_table, Input, Output, State
 import dash_bootstrap_components as dbc
 import pandas as pd
 import plotly.graph_objs as go
-import plotly.express as px
 import base64
 import io
-from datetime import datetime
 
 # Initialize Dash app
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -58,7 +57,6 @@ def format_percent(value):
         val = float(value)
         if pd.isna(val):
             return "0%"
-        # 마이너스 값은 빨간색 처리를 위해 반환
         return f"{val:.1f}%"
     except:
         return "0%"
@@ -579,7 +577,7 @@ def update_data_table(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, sele
     
     return df_display.to_dict('records'), columns, page_size
 
-# Callback 7: 통합 시각화
+# Callback 7: 통합 시각화 (컬럼 선택 반영 + 숫자 겹침 방지)
 @app.callback(
     Output('integrated-viz', 'figure'),
     [Input('stored-data', 'data'),
@@ -588,9 +586,10 @@ def update_data_table(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, sele
      Input('compare-week-2', 'value'),
      Input('compare-week-3', 'value'),
      Input('compare-week-4', 'value'),
-     Input('mall-filter', 'value')]
+     Input('mall-filter', 'value'),
+     Input('column-selector', 'value')]  # 🔥 핵심: 컬럼 선택 반영
 )
-def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter):
+def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, selected_columns):
     if not data or not selected_week:
         return go.Figure()
     
@@ -611,17 +610,17 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter):
     if mall_filter and mall_filter != 'all':
         df_filtered = df_filtered[df_filtered['쇼핑몰'] == mall_filter]
     
+    # 🔥 선택된 컬럼만 표시
+    if not selected_columns:
+        selected_columns = ['매출', '이익', '트래픽비용']  # 기본값
+    
     # 주차별 집계
-    df_agg = df_filtered.groupby('주차').agg({
-        '매출': 'sum',
-        '이익': 'sum',
-        '트래픽비용': 'sum',
-        '순이익': 'sum',
-        '슬롯수': 'sum',
-        '이익률': 'mean',
-        '이익률변동': 'mean',
-        'ROAS': 'mean'
-    }).reset_index()
+    agg_dict = {}
+    for col in selected_columns:
+        if col in df_filtered.columns:
+            agg_dict[col] = 'sum' if col in ['매출', '이익', '트래픽비용', '순이익', '슬롯수'] else 'mean'
+    
+    df_agg = df_filtered.groupby('주차').agg(agg_dict).reset_index()
     
     # 주차 순서 정렬
     df_agg['주차'] = pd.Categorical(df_agg['주차'], categories=all_weeks, ordered=True)
@@ -630,72 +629,64 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter):
     # 차트 생성
     fig = go.Figure()
     
-    # 매출 (막대)
-    fig.add_trace(go.Bar(
-        x=df_agg['주차'],
-        y=df_agg['매출'],
-        name='매출',
-        marker_color='#3b82f6',
-        text=[format_currency_short_man(v) for v in df_agg['매출']],
-        textposition='outside',
-        hovertemplate='<b>%{x}</b><br>매출: %{text}<extra></extra>'
-    ))
+    # 🔥 textposition 차별화 전략 (겹침 방지)
+    text_positions = ['top center', 'bottom center', 'middle left', 'middle right', 
+                      'top left', 'top right', 'bottom left', 'bottom right']
     
-    # 이익 (라인)
-    fig.add_trace(go.Scatter(
-        x=df_agg['주차'],
-        y=df_agg['이익'],
-        name='이익',
-        mode='lines+markers+text',
-        line=dict(color='#10b981', width=3),
-        marker=dict(size=10),
-        text=[format_currency_short_man(v) for v in df_agg['이익']],
-        textposition='top center',
-        yaxis='y2',
-        hovertemplate='<b>%{x}</b><br>이익: %{text}<extra></extra>'
-    ))
-    
-    # 트래픽비용 (라인)
-    fig.add_trace(go.Scatter(
-        x=df_agg['주차'],
-        y=df_agg['트래픽비용'],
-        name='트래픽비용',
-        mode='lines+markers+text',
-        line=dict(color='#f59e0b', width=3),
-        marker=dict(size=10),
-        text=[format_currency_short_man(v) for v in df_agg['트래픽비용']],
-        textposition='bottom center',
-        yaxis='y2',
-        hovertemplate='<b>%{x}</b><br>트래픽비용: %{text}<extra></extra>'
-    ))
-    
-    # 순이익 (라인)
-    fig.add_trace(go.Scatter(
-        x=df_agg['주차'],
-        y=df_agg['순이익'],
-        name='순이익',
-        mode='lines+markers+text',
-        line=dict(color='#ef4444', width=3, dash='dash'),
-        marker=dict(size=10),
-        text=[format_currency_short_man(v) for v in df_agg['순이익']],
-        textposition='top center',
-        yaxis='y2',
-        hovertemplate='<b>%{x}</b><br>순이익: %{text}<extra></extra>'
-    ))
-    
-    # 슬롯수 (라인)
-    fig.add_trace(go.Scatter(
-        x=df_agg['주차'],
-        y=df_agg['슬롯수'],
-        name='슬롯수',
-        mode='lines+markers+text',
-        line=dict(color='#8b5cf6', width=3),
-        marker=dict(size=10),
-        text=[f"{int(v):,}" for v in df_agg['슬롯수']],
-        textposition='bottom center',
-        yaxis='y2',
-        hovertemplate='<b>%{x}</b><br>슬롯수: %{text}<extra></extra>'
-    ))
+    for idx, col in enumerate(selected_columns):
+        if col not in df_agg.columns:
+            continue
+        
+        # 컬럼별 색상 및 스타일 정의
+        col_styles = {
+            '매출': {'color': '#3b82f6', 'type': 'bar', 'yaxis': 'y'},
+            '이익': {'color': '#10b981', 'type': 'line', 'yaxis': 'y2'},
+            '트래픽비용': {'color': '#f59e0b', 'type': 'line', 'yaxis': 'y2'},
+            '순이익': {'color': '#ef4444', 'type': 'line', 'yaxis': 'y2'},
+            '슬롯수': {'color': '#8b5cf6', 'type': 'line', 'yaxis': 'y2'},
+            'ROAS': {'color': '#ec4899', 'type': 'line', 'yaxis': 'y2'},
+            '이익률': {'color': '#06b6d4', 'type': 'line', 'yaxis': 'y2'},
+            '이익률변동': {'color': '#84cc16', 'type': 'line', 'yaxis': 'y2'},
+            '슬롯수변동': {'color': '#f97316', 'type': 'line', 'yaxis': 'y2'}
+        }
+        
+        style = col_styles.get(col, {'color': '#6366f1', 'type': 'line', 'yaxis': 'y2'})
+        
+        # 텍스트 포맷
+        if col in ['매출', '이익', '트래픽비용', '순이익']:
+            text_values = [format_currency_short_man(v) for v in df_agg[col]]
+        elif col in ['이익률', '이익률변동', 'ROAS']:
+            text_values = [format_percent(v) for v in df_agg[col]]
+        else:
+            text_values = [f"{int(v):,}" for v in df_agg[col]]
+        
+        # 🔥 textposition 순환 할당 (겹침 방지)
+        text_pos = text_positions[idx % len(text_positions)]
+        
+        if style['type'] == 'bar':
+            fig.add_trace(go.Bar(
+                x=df_agg['주차'],
+                y=df_agg[col],
+                name=col,
+                marker_color=style['color'],
+                text=text_values,
+                textposition=text_pos,  # 🔥 차별화된 위치
+                yaxis=style['yaxis'],
+                hovertemplate=f'<b>%{{x}}</b><br>{col}: %{{text}}<extra></extra>'
+            ))
+        else:
+            fig.add_trace(go.Scatter(
+                x=df_agg['주차'],
+                y=df_agg[col],
+                name=col,
+                mode='lines+markers+text',
+                line=dict(color=style['color'], width=3),
+                marker=dict(size=10),
+                text=text_values,
+                textposition=text_pos,  # 🔥 차별화된 위치
+                yaxis=style['yaxis'],
+                hovertemplate=f'<b>%{{x}}</b><br>{col}: %{{text}}<extra></extra>'
+            ))
     
     # 레이아웃
     fig.update_layout(
@@ -705,22 +696,20 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter):
             title="매출 (원)",
             titlefont=dict(color='#3b82f6'),
             tickfont=dict(color='#3b82f6'),
-            tickformat=',',
             ticksuffix='만',
             autorange=True
         ),
         yaxis2=dict(
-            title="이익/비용/슬롯수",
+            title="기타 지표",
             titlefont=dict(color='#10b981'),
             tickfont=dict(color='#10b981'),
             overlaying='y',
             side='right',
-            tickformat=',',
             autorange=True
         ),
         hovermode='x unified',
         height=450,
-        margin=dict(t=100, b=50, l=80, r=80),
+        margin=dict(t=150, b=50, l=80, r=80),  # 🔥 상단 여백 증가
         legend=dict(
             orientation='h',
             yanchor='bottom',
@@ -732,7 +721,7 @@ def update_integrated_viz(data, selected_week, cw1, cw2, cw3, cw4, mall_filter):
     
     return fig
 
-# Callback 8: 개별 차트 생성
+# Callback 8: 개별 차트 생성 (호버 중심 + 상위 5개만 레이블)
 @app.callback(
     Output('charts-container', 'children'),
     [Input('stored-data', 'data'),
@@ -773,8 +762,12 @@ def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, selected
         if compare_weeks:
             # 다중 주차 비교 모드
             df_chart = df_filtered.groupby(['주차', '상품명', '쇼핑몰'])[col].sum().reset_index()
+            df_chart = df_chart.sort_values(col, ascending=False)
             
-            # 차트 너비 동적 조정 (가로 스크롤)
+            # 🔥 상위 5개 상품만 추출
+            top_products = df_chart.nlargest(5, col)['상품명'].unique()
+            
+            # 차트 너비 동적 조정
             unique_products = df_chart['상품명'].nunique()
             chart_width = max(1200, unique_products * 80)
             
@@ -793,19 +786,22 @@ def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, selected
                     else:
                         text_values = [f"{int(v):,}" for v in df_mall[col]]
                     
+                    # 🔥 상위 5개만 레이블 표시, 나머지는 호버만
+                    text_positions = ['outside' if p in top_products else 'none' for p in df_mall['상품명']]
+                    
                     fig.add_trace(go.Bar(
                         x=df_mall['상품명'],
                         y=df_mall[col],
                         name=f"{week} - {mall}",
                         marker_color=color_map.get(mall, '#6366f1'),
                         text=text_values,
-                        textposition='outside',
+                        textposition=text_positions,  # 🔥 차별화
                         hovertemplate='<b>%{x}</b><br>%{text}<extra></extra>'
                     ))
             
             # Y축 포맷
             if col in ['매출', '이익', '트래픽비용', '순이익']:
-                yaxis_format = dict(tickformat=',', ticksuffix='만')
+                yaxis_format = dict(ticksuffix='만')
             elif col in ['이익률', '이익률변동', 'ROAS']:
                 yaxis_format = dict(ticksuffix='%')
             else:
@@ -819,14 +815,17 @@ def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, selected
                 barmode='group',
                 height=500,
                 width=chart_width,
-                margin=dict(t=80, b=100, l=80, r=50),
+                margin=dict(t=150, b=100, l=80, r=50),  # 🔥 상단 여백 증가
                 hovermode='x unified',
                 legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
             )
         else:
-            # 단일 주차 모드 (상위 상품만 표시)
+            # 단일 주차 모드
             df_chart = df_filtered.groupby(['상품명', '쇼핑몰'])[col].sum().reset_index()
             df_chart = df_chart.nlargest(20, col)
+            
+            # 🔥 상위 5개만 추출
+            top_products = df_chart.nlargest(5, col)['상품명'].unique()
             
             # 차트 너비 동적 조정
             chart_width = max(1200, len(df_chart) * 60)
@@ -844,19 +843,22 @@ def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, selected
                 else:
                     text_values = [f"{int(v):,}" for v in df_mall[col]]
                 
+                # 🔥 상위 5개만 레이블 표시
+                text_positions = ['outside' if p in top_products else 'none' for p in df_mall['상품명']]
+                
                 fig.add_trace(go.Bar(
                     x=df_mall['상품명'],
                     y=df_mall[col],
                     name=mall,
                     marker_color=color_map.get(mall, '#6366f1'),
                     text=text_values,
-                    textposition='outside',
+                    textposition=text_positions,  # 🔥 차별화
                     hovertemplate='<b>%{x}</b><br>%{text}<extra></extra>'
                 ))
             
             # Y축 포맷
             if col in ['매출', '이익', '트래픽비용', '순이익']:
-                yaxis_format = dict(tickformat=',', ticksuffix='만')
+                yaxis_format = dict(ticksuffix='만')
             elif col in ['이익률', '이익률변동', 'ROAS']:
                 yaxis_format = dict(ticksuffix='%')
             else:
@@ -869,12 +871,12 @@ def update_charts(data, selected_week, cw1, cw2, cw3, cw4, mall_filter, selected
                 yaxis=yaxis_format,
                 height=500,
                 width=chart_width,
-                margin=dict(t=80, b=100, l=80, r=50),
+                margin=dict(t=150, b=100, l=80, r=50),  # 🔥 상단 여백 증가
                 hovermode='x unified',
                 legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
             )
         
-        # Y축 범위 자동 조정 (높은/낮은 수치 모두 표시)
+        # Y축 범위 자동 조정
         fig.update_yaxes(autorange=True)
         
         # 차트를 Div로 감싸서 가로 스크롤 적용
