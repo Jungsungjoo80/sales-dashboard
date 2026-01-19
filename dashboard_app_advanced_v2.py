@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+"""
 LABONLAB 트래픽 데이터 분석 대시보드 v7 (베이스라인 기반 수정본)
 요청 반영:
 1) 숫자 잘림/겹침 해결(공통 margin/cliponaxis/uniformtext/라벨 정책)
